@@ -1,6 +1,6 @@
 <?php
 /* =========================================================================
-   Fencing Profile Linker — clean build, May 2025
+   Fencing Profile Linker — clean build, May 2025
    ========================================================================= */
 $results = [];
 $error   = null;
@@ -10,7 +10,7 @@ function build_search_url(string $name): string {
 }
 
 /* --------------------------------------------------------------------- */
-/*  Main POST handler                                                    */
+/* Main POST handler                                                    */
 /* --------------------------------------------------------------------- */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $askfredUrl = trim($_POST['askfred'] ?? '');
@@ -44,10 +44,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $rating= $pr['classification'] ?? ($pr['rating'] ?? 'U');
                         if (!$rating || !preg_match('/^[ABCDEU]/', $rating)) $rating='U';
 
-                        $results[] = [
-                            'name'=>$name,'club'=>$club,'event'=>$evtName,
-                            'rating'=>$rating,'url'=>build_search_url($name)
-                        ];
+                        if (!empty($name)) { // Ensure name is not empty
+                            $results[] = [
+                                'name'=>$name,'club'=>$club,'event'=>$evtName,
+                                'rating'=>$rating,'url'=>build_search_url($name)
+                            ];
+                        }
                     }
                 }
 
@@ -55,7 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 libxml_use_internal_errors(true);
                 $dom = new DOMDocument();
-                $dom->loadHTML($html);
+                @$dom->loadHTML($html); // Suppress warnings from potentially malformed HTML
                 $xp  = new DOMXPath($dom);
 
                 foreach ($xp->query('//div[contains(@class,"card") and .//table[contains(@class,"preregistration-list")]]') as $card) {
@@ -69,6 +71,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $club   = trim($tds->item(2)->textContent);
                         $rating = trim($tds->item($tds->length-1)->textContent);
                         if ($name==='') continue;
+                        if (!$rating || !preg_match('/^[ABCDEU]/', $rating)) $rating='U';
+
 
                         $results[] = [
                             'name'=>$name,'club'=>$club,'event'=>$evtName,
@@ -80,37 +84,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    /* 2) USA FENCING TEXT ********************************************** */
+    /* 2) USA FENCING TEXT ********************************************** */
     if ($usafText !== '') {
         $lines = preg_split('/\\r?\\n/', $usafText);
         $total = count($lines);
         for ($i=0;$i<$total;$i++){
             $line = trim($lines[$i]);
-            if (strpos($line, ',') !== false) {
-                $club = ($i+2<$total)?preg_replace('/#\\d+/', '', trim($lines[$i+2])):'';
-                $rating='';
-                for ($j=1;$j<=3&&$i+$j<$total;$j++){
-                    if (preg_match('/\\b[ABCDEU]\\d{0,4}\\b/', $lines[$i+$j], $m)) { $rating=$m[0]; break; }
+            if (strpos($line, ',') !== false) { // Likely a name line
+                $club = '';
+                if ($i + 2 < $total) {
+                    $potentialClubLine = trim($lines[$i+2]);
+                    // Basic check: if it doesn't look like another name, assume it's a club
+                    if (strpos($potentialClubLine, ',') === false) {
+                         $club = preg_replace('/#\\d+/', '', $potentialClubLine);
+                    }
                 }
+
+                $rating='';
+                // Check current line and next few lines for a rating
+                for ($j=0;$j<=3&&$i+$j<$total;$j++){ // Start check from current line $j=0
+                    if (preg_match('/\\b([ABCDEU][0-9]{0,4})\\b/', trim($lines[$i+$j]), $m)) {
+                         $rating=$m[1]; break;
+                    }
+                }
+                 if (!$rating || !preg_match('/^[ABCDEU]/', $rating)) $rating='U';
+
+
                 [$last,$first]=array_map('trim', explode(',', $line)+['','']);
                 $name=trim("$first $last");
 
-                $results[]=[
-                    'name'=>$name,'club'=>$club,'event'=>'',
-                    'rating'=>$rating,'url'=>build_search_url($name)
-                ];
+                if (!empty($name)) { // Ensure name is not empty
+                    $results[]=[
+                        'name'=>$name,'club'=>$club,'event'=>'',
+                        'rating'=>$rating,'url'=>build_search_url($name)
+                    ];
+                }
             }
         }
     }
 
-    /* 3) DEDUPLICATE (Name + Event) *********************************** */
-    $seen = [];
-    $unique = [];
-    foreach ($results as $row) {
-        $k = $row['name'].'|'.$row['event'];
-        if (!isset($seen[$k])) { $seen[$k]=1; $unique[]=$row; }
+    /* 3) DEDUPLICATE *************************************************** */
+    // Step 1: Get unique (Name, Event) pairs, ensuring event names are consistent
+    $temp_combined_results = $results;
+    $seen_name_event_keys = [];
+    $unique_by_name_event = [];
+    foreach ($temp_combined_results as $row) {
+        // Normalize event name: trim and treat genuinely empty strings as such
+        $event_name = trim($row['event'] ?? '');
+        $current_name = trim($row['name'] ?? '');
+
+        if (empty($current_name)) continue; // Skip entries with no name
+
+        $key = $current_name . '|' . $event_name;
+        if (!isset($seen_name_event_keys[$key])) {
+            $seen_name_event_keys[$key] = true;
+            // Store with the normalized event name
+            $row['event'] = $event_name;
+            $row['name'] = $current_name;
+            $unique_by_name_event[] = $row;
+        }
     }
-    $results = $unique;
+
+    // Step 2: Identify fencers who have at least one entry with a specific event
+    $fencer_has_specific_event = [];
+    foreach ($unique_by_name_event as $row) {
+        if (!empty($row['event'])) { // Event is not an empty string
+            $fencer_has_specific_event[$row['name']] = true;
+        }
+    }
+
+    // Step 3: Build the final list
+    // Exclude generic entries (empty event) if a specific event entry exists for that fencer
+    $final_results = [];
+    foreach ($unique_by_name_event as $row) {
+        if (!empty($row['event'])) {
+            // Always include entries that have a specific event
+            $final_results[] = $row;
+        } else {
+            // This is an entry with an empty event (generic)
+            // Include it ONLY if this fencer does NOT have any other entry with a specific event
+            if (!isset($fencer_has_specific_event[$row['name']])) {
+                $final_results[] = $row;
+            }
+        }
+    }
+    $results = $final_results;
 }
 ?>
 <!doctype html>
@@ -136,12 +194,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   <div class="mb-3">
     <label class="form-label" for="usaf">USA Fencing entrant text</label>
     <textarea class="form-control" id="usaf" name="usaf" rows="6"
-              placeholder="Paste entrant list here"><?= htmlspecialchars($_POST['usaf'] ?? '') ?></textarea>
+              placeholder="Paste entrant list here (name on one line, club (optional) two lines below)"><?= htmlspecialchars($_POST['usaf'] ?? '') ?></textarea>
   </div>
   <button class="btn btn-primary" type="submit">Generate Links</button>
 </form>
 
-<?php if ($results): ?>
+<?php if (!empty($results)): ?>
 <div class="mb-3">
   <button id="copyBtn" class="btn btn-secondary me-2">Copy to Clipboard</button>
   <button id="csvBtn"  class="btn btn-success">Download CSV</button>
@@ -178,15 +236,33 @@ function toCSV(rows){
 }
 
 $(function(){
-  $('#copyBtn').on('click', () => navigator.clipboard.writeText(
-    window.tableData.map(r=>`${r.name} (${r.rating||'U'}) — ${r.event}`).join('\n')
-  ).then(()=>alert('Copied!')));
+  $('#copyBtn').on('click', () => {
+    if (window.tableData && window.tableData.length > 0) {
+        navigator.clipboard.writeText(
+            window.tableData.map(r => {
+                let eventText = r.event ? ` — ${r.event}` : '';
+                return `${r.name} ${r.rating ? '(' + r.rating + ')' : '(U)'}${eventText} — ${r.url}`;
+            }).join('\n')
+        ).then(() => alert('Copied!'));
+    } else {
+        alert('No data to copy.');
+    }
+  });
 
   $('#csvBtn').on('click', ()=>{
-    const blob = new Blob([toCSV(window.tableData)], {type:'text/csv'});
-    const url  = URL.createObjectURL(blob);
-    $('<a>').attr({href:url,download:'fencers.csv'})[0].click();
-    URL.revokeObjectURL(url);
+    if (window.tableData && window.tableData.length > 0) {
+        const blob = new Blob([toCSV(window.tableData)], {type:'text/csv'});
+        const url  = URL.createObjectURL(blob);
+        const a = document.createElement('a'); // Use vanilla JS for this part
+        a.href = url;
+        a.download = 'fencers.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    } else {
+        alert('No data to download.');
+    }
   });
 });
 </script>
