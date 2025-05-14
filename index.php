@@ -1,6 +1,6 @@
 <?php
 /* =========================================================================
-   FencingTracker Profile Linker
+   Fencing Profile Linker
    ========================================================================= */
 $results = [];
 $error   = null;
@@ -246,14 +246,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </style>
 </head>
 <body class="container py-4">
-<h1 class="mb-4">FencingTracker Profile Linker</h1>
-    <div class="mb-4">
-      <a href="instructions.html"
-         class="btn btn-secondary shadow-sm fw-semibold"
-         style="font-size:1rem;">
-        📄 View Instructions
-      </a>
-    </div>
+<h1 class="mb-4">Fencing Profile Linker</h1>
+<div class="mb-4">
+  <a href="instructions.html"
+     class="btn btn-secondary shadow-sm fw-semibold"
+     style="font-size:1rem;">
+    📄 View Instructions
+  </a>
+</div>
 <?php if ($error): ?><div class="alert alert-danger"><?= nl2br(htmlspecialchars($error)) ?></div><?php endif; ?>
 
 <form method="post" class="mb-4">
@@ -281,7 +281,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <?php if (!empty($results)): ?>
 <div class="mb-3">
   <button id="copyBtn" class="btn btn-secondary me-2">Copy to Clipboard</button>
-  <button id="csvBtn"  class="btn btn-success">Download CSV</button>
+  <button id="csvBtn" class="btn btn-warning me-2">Download CSV</button>
+  <button id="xlsxBtn" class="btn btn-success">Download Excel (.xlsx)</button>
 </div>
 
 <table class="table table-striped" id="resultsTable">
@@ -312,6 +313,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <?php endif; ?>
 
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<!-- SheetJS for XLSX export -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
 $(function(){
   $('#clearBtn').on('click', function() { 
@@ -352,6 +355,32 @@ $(function(){
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
     } else { alert('No data to download.'); }
+  });
+
+  // XLSX export logic using SheetJS
+  $('#xlsxBtn').on('click', function () {
+    if (window.tableData && window.tableData.length > 0) {
+        // Prepare worksheet data (array of arrays, with header row first)
+        const ws_data = [
+            ['Name', 'Club', 'Event', 'Rating', 'Rank', 'URL'],
+            ...window.tableData.map(r => [
+                r.name,
+                r.club,
+                r.event,
+                r.rating,
+                r.rank ?? '',
+                r.url
+            ])
+        ];
+        // Create worksheet and workbook
+        const ws = XLSX.utils.aoa_to_sheet(ws_data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Fencers');
+        // Write file and trigger download
+        XLSX.writeFile(wb, 'fencers.xlsx');
+    } else {
+        alert('No data to download.');
+    }
   });
 
   const $table = $('#resultsTable');
